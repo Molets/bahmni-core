@@ -222,7 +222,7 @@
         <testResources>
             <testResource>
                 <directory>src/test/resources</directory>
-                <filtering>true</filtering>
+                <filtering>false</filtering> <!--Moletsane changes - from true -->
             </testResource>
         </testResources>
         <plugins>
