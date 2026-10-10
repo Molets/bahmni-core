@@ -14,7 +14,7 @@ import java.util.List;
 import java.util.UUID;
 import java.util.regex.Pattern;
 
-public class MiscUtils {
+public class MiscUtils extends eRegisterMiscUtils{
     public static List<Concept> getConceptsForNames(List<String> conceptNames, ConceptService conceptService) {
         //Returning null for the sake of UTs
         if (CollectionUtils.isNotEmpty(conceptNames)) {

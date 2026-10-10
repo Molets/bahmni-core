@@ -4683,4 +4683,7 @@
         <sqlFile path="V1_99_WardsListSql.sql"/>
     </changeSet>
 
+    <!-- Include eRegister Lesotho XML changelog files -->
+    <include file="eRegister-liquibase-ext.xml"/>
+
 </databaseChangeLog>

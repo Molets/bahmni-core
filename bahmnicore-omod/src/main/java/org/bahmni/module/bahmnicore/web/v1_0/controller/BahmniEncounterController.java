@@ -2,13 +2,25 @@ package org.bahmni.module.bahmnicore.web.v1_0.controller;
 
 import org.apache.log4j.LogManager;
 import org.apache.log4j.Logger;
+import org.bahmni.module.bahmnicore.service.ObsFormToServiceTypeMappingService;
 import org.bahmni.module.bahmnicore.web.v1_0.VisitClosedException;
+import org.joda.time.DateTime;
 import org.openmrs.Encounter;
+import org.openmrs.Location;
+import org.openmrs.Patient;
 import org.openmrs.Visit;
-import org.openmrs.api.EncounterService;
-import org.openmrs.api.OrderEntryException;
+import org.openmrs.api.*;
+import org.openmrs.api.context.Context;
+import org.openmrs.module.appointments.model.Appointment;
+import org.openmrs.module.appointments.model.AppointmentKind;
+import org.openmrs.module.appointments.model.AppointmentServiceDefinition;
+import org.openmrs.module.appointments.model.AppointmentServiceType;
+import org.openmrs.module.appointments.service.AppointmentServiceDefinitionService;
+import org.openmrs.module.appointments.service.AppointmentStatusMarkerService;
+import org.openmrs.module.appointments.service.AppointmentsService;
 import org.openmrs.module.bahmniemrapi.encountertransaction.contract.BahmniEncounterSearchParameters;
 import org.openmrs.module.bahmniemrapi.encountertransaction.contract.BahmniEncounterTransaction;
+import org.openmrs.module.bahmniemrapi.encountertransaction.contract.BahmniObservation;
 import org.openmrs.module.bahmniemrapi.encountertransaction.mapper.BahmniEncounterTransactionMapper;
 import org.openmrs.module.bahmniemrapi.encountertransaction.service.BahmniEncounterTransactionService;
 import org.openmrs.module.emrapi.encounter.EmrEncounterService;
@@ -23,11 +35,14 @@ import org.springframework.stereotype.Controller;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
-import java.util.Date;
-import java.util.HashMap;
-import java.util.Map;
+import java.text.DateFormat;
+import java.text.ParseException;
+import java.text.SimpleDateFormat;
+import java.util.*;
+import java.util.stream.Collectors;
 
 import static org.bahmni.module.bahmnicore.util.MiscUtils.setUuidsForObservations;
+import static org.bahmni.module.bahmnicore.util.eRegisterMiscUtils.getFollowUpDateObservation;
 
 @Controller
 @RequestMapping(value = "/rest/" + RestConstants.VERSION_1 + "/bahmnicore/bahmniencounter")
@@ -53,6 +68,39 @@ public class BahmniEncounterController extends BaseRestController {
         this.bahmniEncounterTransactionService = bahmniEncounterTransactionService;
         this.bahmniEncounterTransactionMapper = bahmniEncounterTransactionMapper;
     }
+
+    /* ***** MOLETSANE Changes ******/
+    private static final String DATE_TIME_PATTERN = "yyyy-MM-dd HH:mm";
+
+    private static final String TIME_PATTERN = "HH:mm";
+
+    private static final String DATE_PATTERN = "yyyy-MM-dd";
+
+    @Autowired
+    ObsFormToServiceTypeMappingService obsFormToServiceTypeMappingService;
+
+    @Autowired
+    private LocationService locationService;
+
+    @Autowired
+    private ProviderService providerService;
+
+    @Autowired
+    private PatientService patientService;
+
+    private AppointmentServiceDefinitionService getAppointmentServiceDefinitionService() {
+        return Context.getService(AppointmentServiceDefinitionService.class);
+    }
+
+    private AppointmentsService getAppointmentsService() {
+        return Context.getService(AppointmentsService.class);
+    }
+
+    private AppointmentStatusMarkerService getAppointmentStatusMarkerService() {
+        return Context.getService(AppointmentStatusMarkerService.class);
+    }
+
+    /* ****** End ****** */
 
     @RequestMapping(method = RequestMethod.GET, value = "/{uuid}")
     @ResponseBody
@@ -94,8 +142,204 @@ public class BahmniEncounterController extends BaseRestController {
     @Transactional
     public BahmniEncounterTransaction update(@RequestBody BahmniEncounterTransaction bahmniEncounterTransaction) {
         setUuidsForObservations(bahmniEncounterTransaction.getObservations());
+
+        /* ******   MOLETSANE Changes ****** */
+        bahmniEncounterTransaction.getObservations().forEach( observationForm -> {
+            String obsFormUuid = observationForm.getConceptUuid();
+            String serviceTypeUuid = obsFormToServiceTypeMappingService.getServiceTypeUuid(obsFormUuid);
+
+            if (serviceTypeUuid != null && !serviceTypeUuid.isEmpty() ){
+
+                BahmniObservation artFollowUpObservation = getFollowUpDateObservation(new ArrayList<>(Collections.singletonList(observationForm)));
+
+                if(artFollowUpObservation != null)
+                    createPatientAppointment(artFollowUpObservation, bahmniEncounterTransaction, serviceTypeUuid);
+            }
+        });
+        /* ******   End of Changes ******* */
+
         return bahmniEncounterTransactionService.save(bahmniEncounterTransaction);
     }
+
+    private void createPatientAppointment(BahmniObservation bahmniObs, BahmniEncounterTransaction bahmniEncounterTransaction, String appointmentServiceTypeUuid) {
+        DateFormat dateFormat = new SimpleDateFormat(DATE_PATTERN);
+
+        // The current encounter has a follow up date
+        if(bahmniObs != null){
+
+            try {
+
+                AppointmentServiceType appointmentServiceType = getAppointmentServiceDefinitionService().getAppointmentServiceTypeByUuid(appointmentServiceTypeUuid);
+
+
+                logger.info("\n============AppointmentServiceType Determined :============= \n" + appointmentServiceType + " \n\n\n======================================================================================\n\n\n\n\n\n\n\n\n");
+
+                if (appointmentServiceType != null) {
+
+
+
+                    System.out.println("Now in the IFFFFFFFFF after AppointmentServiceType != NULL!!!! \n\n\n===============\n\n");
+
+                    Date startDate = dateFormat.parse(bahmniObs.getValueAsString());
+                    Date endDate = dateFormat.parse(bahmniObs.getValueAsString());
+                    Location location = locationService.getLocationByUuid(bahmniEncounterTransaction.getLocationUuid());
+                    Patient patient = patientService.getPatientByUuid(bahmniEncounterTransaction.getPatientUuid());
+                    AppointmentServiceDefinition appointmentServiceDefinition = appointmentServiceType.getAppointmentServiceDefinition();
+
+                    Appointment appointment = new Appointment();
+
+                    // For a particular patient,service type,Location
+                    appointment.setPatient(patient);
+                    appointment.setServiceType(appointmentServiceType);
+                    appointment.setLocation(location);
+
+                    if (bahmniEncounterTransaction.getEncounterUuid() == null) {
+                        // New encounter, first time an HIV Intake or Follow up is saved
+                        appointment.setService(appointmentServiceDefinition);
+
+                        if (!bahmniEncounterTransaction.getProviders().isEmpty()) {
+                            appointment.setProvider(providerService.getProviderByUuid(bahmniEncounterTransaction
+                                    .getProviders().iterator().next().getUuid()));
+                        }
+
+                        appointment.setStartDateTime(startDate);
+                        appointment.setEndDateTime(endDate);
+                        appointment.setAppointmentKind(AppointmentKind.valueOf("Scheduled"));
+                        appointment.setComments("");
+
+                        Appointment savedAppointment = getAppointmentsService().validateAndSave(appointment);
+
+                    } else if (bahmniEncounterTransaction.getEncounterUuid() != null) {
+                        if (new DateTime(bahmniEncounterTransaction.getEncounterDateTime()).toDateMidnight()
+                                .equals(new DateTime(new Date()).toDateMidnight())) {
+
+                            // Search for the appointment using the parameters, patient, service type and location
+                            List<Appointment> foundAppointments = getAppointmentsService().search(appointment);
+
+                            if (foundAppointments.iterator().hasNext()) {
+                                // Can only have one and only one future appointment for the patient
+                                // Sort the list in descending order first
+                                List<Appointment> sortedAppointments = foundAppointments.stream()
+                                        .sorted(Comparator.comparing(Appointment::getStartDateTime).reversed())
+                                        .collect(Collectors.toList());
+
+                                Appointment searchedAppointment = sortedAppointments.iterator().next();
+
+                                // Check to see if the Follow Up date is in the future compared to today's date, only update
+                                // an appointment in the future
+                                if (new DateTime(searchedAppointment.getEndDateTime()).toDateMidnight()
+                                        .isAfter(new DateTime(new Date()).toDateMidnight())) {
+
+                                    // Update/Edit appointment with the new Follow up date if set in the future for the patient
+                                    // , in same location, for same service
+                                    if (searchedAppointment.getService().getId().equals(appointmentServiceDefinition.getAppointmentServiceId())) {
+
+                                        searchedAppointment.setStartDateTime(startDate);
+                                        searchedAppointment.setEndDateTime(endDate);
+                                        getAppointmentsService().validateAndSave(searchedAppointment);
+
+                                    } else {
+
+                                        // Create a new future appointment for patient, for service in location
+                                        appointment.setService(appointmentServiceDefinition);
+
+                                        if (!bahmniEncounterTransaction.getProviders().isEmpty()) {
+                                            appointment.setProvider(providerService.getProviderByUuid(bahmniEncounterTransaction
+                                                    .getProviders().iterator().next().getUuid()));
+                                        }
+
+                                        appointment.setStartDateTime(startDate);
+                                        appointment.setEndDateTime(endDate);
+                                        appointment.setAppointmentKind(AppointmentKind.valueOf("Scheduled"));
+                                        appointment.setComments("");
+
+                                        getAppointmentsService().validateAndSave(appointment);
+                                    }
+
+                                } else {
+                                    // Create a new future appointment for patient, for service in location
+                                    appointment.setService(appointmentServiceDefinition);
+
+                                    if (!bahmniEncounterTransaction.getProviders().isEmpty()) {
+                                        appointment.setProvider(providerService.getProviderByUuid(bahmniEncounterTransaction
+                                                .getProviders().iterator().next().getUuid()));
+                                    }
+
+                                    appointment.setStartDateTime(startDate);
+                                    appointment.setEndDateTime(endDate);
+                                    appointment.setAppointmentKind(AppointmentKind.valueOf("Scheduled"));
+                                    appointment.setComments("");
+
+                                    getAppointmentsService().validateAndSave(appointment);
+                                }
+                            } else {
+                                // New encounter, first time an HIV Intake or Follow up is saved
+                                appointment.setService(appointmentServiceDefinition);
+
+                                if (!bahmniEncounterTransaction.getProviders().isEmpty()) {
+                                    appointment.setProvider(providerService.getProviderByUuid(bahmniEncounterTransaction
+                                            .getProviders().iterator().next().getUuid()));
+                                }
+
+                                appointment.setStartDateTime(startDate);
+                                appointment.setEndDateTime(endDate);
+                                appointment.setAppointmentKind(AppointmentKind.valueOf("Scheduled"));
+                                appointment.setComments("");
+
+                                getAppointmentsService().validateAndSave(appointment);
+                            }
+                        }
+                    } else if (new DateTime(bahmniEncounterTransaction.getEncounterDateTime()).toDateMidnight()
+                            .isBefore(new DateTime(new Date()).toDateMidnight())) {
+                        // Happened before today and has a follow up date, therefore an EDIT of a retrospective visit
+
+                        // Do nothing, determine how to tie a retrospective encounter with a particular appointment date
+                        // The first date in the future as compared to the retrospective visit date
+                        // getAllAppointmentsInDateRange
+
+                        // Get all appointments in the future compared to the retrospective encounter date
+                        List<Appointment> foundAppointments = getAppointmentsService().getAllAppointmentsInDateRange(
+                                bahmniEncounterTransaction.getEncounterDateTime(), new Date());
+
+                        if (foundAppointments.iterator().hasNext()) {
+                            // Can only have one and only one future appointment for the patient
+                            // Sort the list in ascending order, smallest date in future compared to retrospective
+                            // encounter date first
+                            List<Appointment> sortedAppointments = foundAppointments.stream()
+                                    .sorted(Comparator.comparing(Appointment::getStartDateTime))
+                                    .collect(Collectors.toList());
+
+                            Appointment searchedAppointment = sortedAppointments.iterator().next();
+
+                            // Check to see if the Follow Up date is in the future compared to the retrospective
+                            // encounter date, only update the first appointment in the future relative to encounter date
+                            if (new DateTime(searchedAppointment.getEndDateTime()).toDateMidnight()
+                                    .isAfter(new DateTime(bahmniEncounterTransaction.getEncounterDateTime())
+                                            .toDateMidnight().plusDays(10))) {
+                                // Update/Edit appointment with the new Follow up date if set in the future for the patient
+                                // , in same location, for same service
+                                searchedAppointment.setStartDateTime(startDate);
+                                searchedAppointment.setEndDateTime(endDate);
+                                getAppointmentsService().validateAndSave(searchedAppointment);
+                            }
+                        }
+                    }
+
+                    //  Mark Appointments
+                    Date todayMorning = new DateTime(bahmniEncounterTransaction.getEncounterDateTime()).toDate();
+                    getAppointmentStatusMarkerService().markPatientFutureAppointments(patient,
+                            appointmentServiceDefinition, todayMorning, startDate);
+
+                }
+
+            } catch (ParseException e) {
+                // Use the openmrs logger to log the exception
+            }
+        }
+
+
+    }
+
 
     public BahmniEncounterTransaction get(String encounterUuid) {
         Encounter encounter = encounterService.getEncounterByUuid(encounterUuid);
